@@ -5,17 +5,18 @@ use group::Curve;
 use poly::Polynomial;
 use rand::Rng;
 
-pub struct KzgCommitmentScheme {
+#[derive(Debug, Clone)]
+pub struct Proof(pub G1Affine);
+
+#[derive(Debug, Clone)]
+pub struct KZGTrustedSetup {
     pub srs_g1: Vec<G1Affine>,
     pub srs_g2: Vec<G2Affine>,
     pub max_degree: usize,
 }
 
-#[derive(Debug, Clone)]
-pub struct Proof(pub G1Affine);
-
-impl KzgCommitmentScheme {
-    pub fn trusted_setup<R: Rng>(max_degree: usize, rng: R) -> Self {
+impl KZGTrustedSetup {
+    pub fn new<R: Rng>(max_degree: usize, rng: R) -> Self {
         let tau = Scalar::random(rng);
         let g1 = G1Projective::generator();
         let mut srs_g1 = Vec::with_capacity(max_degree + 1);
@@ -41,13 +42,23 @@ impl KzgCommitmentScheme {
             max_degree,
         }
     }
+}
+
+pub struct KZGProver {
+    setup: KZGTrustedSetup,
+}
+
+impl KZGProver {
+    pub fn new(setup: KZGTrustedSetup) -> Self {
+        Self { setup }
+    }
 
     pub fn commit(&self, polynomial: &Polynomial) -> G1Affine {
-        if polynomial.degree() > self.max_degree {
+        if polynomial.degree() > self.setup.max_degree {
             panic!(
                 "Polynomial degree {} exceeds maximum degree {}",
                 polynomial.degree(),
-                self.max_degree
+                self.setup.max_degree
             );
         }
 
@@ -55,7 +66,7 @@ impl KzgCommitmentScheme {
 
         for (i, &coeff) in polynomial.coeffs.iter().enumerate() {
             if coeff != Scalar::ZERO {
-                commitment += self.srs_g1[i] * coeff;
+                commitment += self.setup.srs_g1[i] * coeff;
             }
         }
 
@@ -84,6 +95,16 @@ impl KzgCommitmentScheme {
         // Create proof: π = q(τ) * g1
         Proof(self.commit(&quotient))
     }
+}
+
+pub struct KZGVerifier {
+    setup: KZGTrustedSetup,
+}
+
+impl KZGVerifier {
+    pub fn new(setup: KZGTrustedSetup) -> Self {
+        Self { setup }
+    }
 
     pub fn verify(
         &self,
@@ -95,13 +116,14 @@ impl KzgCommitmentScheme {
         use bls12_381::pairing;
 
         // Compute p(τ)*g1 - y*g1 = (p(τ) - y)*g1
-        let adjusted_commitment = G1Projective::from(commitment) - (value * self.srs_g1[0]);
+        let adjusted_commitment = G1Projective::from(commitment) - (value * self.setup.srs_g1[0]);
 
         // Compute τ*g2 - z*g2 = (τ - z)*g2
-        let tau_minus_z = self.srs_g2[1] - (G2Projective::from(self.srs_g2[0]) * challenge);
+        let tau_minus_z =
+            self.setup.srs_g2[1] - (G2Projective::from(self.setup.srs_g2[0]) * challenge);
 
         // Verify: e(C - y*g1, g2) = e(q(τ) * g1, (τ - z)*g2)
-        let lhs = pairing(&adjusted_commitment.to_affine(), &self.srs_g2[0]);
+        let lhs = pairing(&adjusted_commitment.to_affine(), &self.setup.srs_g2[0]);
         let rhs = pairing(&proof.0, &tau_minus_z.to_affine());
 
         lhs == rhs
