@@ -1,8 +1,10 @@
 use bls12_381::Scalar;
+use ff::Field;
 use fri::{FRIProver, FRIVerifier};
 use kzg::{KZGProver, KZGTrustedSetup, KZGVerifier};
 use poly::Polynomial;
-use rand::thread_rng;
+use rand::{Rng, thread_rng};
+use std::time::Instant;
 
 mod fri;
 mod kzg;
@@ -10,7 +12,100 @@ mod merkle;
 mod poly;
 mod utils;
 
-fn kzg() {
+fn kzg_benchmark() {
+    println!("=== KZG Benchmark ===");
+    let mut rng = thread_rng();
+
+    // Test with polynomial of degree 1023 (2^10 - 1)
+    let degree = 1023;
+
+    // Trusted setup timing
+    let start = Instant::now();
+    let setup = KZGTrustedSetup::new(degree, &mut rng);
+    let setup_time = start.elapsed();
+    println!(
+        "KZG Trusted Setup Time (degree {}): {:?}",
+        degree, setup_time
+    );
+
+    // Create large random polynomial
+    let coeffs: Vec<Scalar> = (0..=degree).map(|_| Scalar::random(&mut rng)).collect();
+    let polynomial = Polynomial::new(coeffs);
+
+    let prover = KZGProver::new(setup.clone());
+
+    // Commit timing
+    let start = Instant::now();
+    let commitment = prover.commit(&polynomial);
+    let commit_time = start.elapsed();
+    println!("KZG Commit Time: {:?}", commit_time);
+
+    // Proving timing
+    let challenge = Scalar::random(&mut rng);
+    let value = polynomial.evaluate(&challenge);
+
+    let start = Instant::now();
+    let proof = prover.prove(&polynomial, &challenge);
+    let prove_time = start.elapsed();
+    println!("KZG Prove Time: {:?}", prove_time);
+
+    // Verification timing
+    let verifier = KZGVerifier::new(setup);
+
+    let start = Instant::now();
+    let is_valid = verifier.verify(&commitment, &challenge, &value, &proof);
+    let verify_time = start.elapsed();
+    println!("KZG Verify Time: {:?}", verify_time);
+    println!("KZG Verification Result: {}", is_valid);
+    assert!(is_valid);
+    println!();
+}
+
+fn fri_benchmark() {
+    println!("=== FRI Benchmark ===");
+    let mut rng = thread_rng();
+
+    // Test with polynomial of degree 1023 (2^10 - 1, requires 10 folding rounds)
+    let degree = 1023;
+    let num_rounds = 10; // log2(1024) = 10
+
+    // Create large random polynomial with 1024 coefficients (degree 1023)
+    let coeffs: Vec<Scalar> = (0..1024).map(|_| Scalar::random(&mut rng)).collect();
+    let poly = Polynomial::new(coeffs);
+
+    let mut prover = FRIProver::new(4); // blowup factor of 4
+
+    // Generate random values for folding (one per round)
+    let random_values: Vec<Scalar> = (0..num_rounds).map(|_| Scalar::random(&mut rng)).collect();
+
+    // Commit phase timing
+    let start = Instant::now();
+    let commitments = prover.commit(poly, random_values.clone());
+    let commit_time = start.elapsed();
+    println!("FRI Commit Time (degree {}): {:?}", degree, commit_time);
+
+    // Query phase timing
+    let random_index = rng.gen_range(0..1024);
+
+    let start = Instant::now();
+    let proofs = prover.query(random_index);
+    let prove_time = start.elapsed();
+    println!("FRI Prove Time: {:?}", prove_time);
+
+    // Verification timing
+    let verifier = FRIVerifier::new(random_values, commitments);
+
+    let start = Instant::now();
+    let result = verifier.verify(proofs);
+    let verify_time = start.elapsed();
+    println!("FRI Verify Time: {:?}", verify_time);
+    println!("FRI Verification Result: {}", result);
+    assert!(result);
+    println!();
+}
+
+fn kzg_small() {
+    println!("=== Small KZG Example ===");
     let mut rng = thread_rng();
     let setup = KZGTrustedSetup::new(5, &mut rng);
 
@@ -34,9 +129,11 @@ fn kzg() {
     let is_valid = verifier.verify(&commitment, &challenge, &value, &proof);
     println!("KZG verification: {}", is_valid);
     assert!(is_valid);
+    println!();
 }
 
-fn fri() {
+fn fri_small() {
+    println!("=== Small FRI Example ===");
     // polynomial of f(x) = 19 + 56x + 34x^2 + 48x^3 + 43x^4 + 37x^5 + 10x^6 + 0x^7
     let poly = vec![19, 56, 34, 48, 43, 37, 10, 0]
         .into_iter()
@@ -62,10 +159,16 @@ fn fri() {
     // verify phase
     let verifier = FRIVerifier::new(random_values, commitments);
     let result = verifier.verify(proofs);
-    println!("FRI verification {result}");
+    println!("FRI verification: {}", result);
+    println!();
 }
 
 fn main() {
-    kzg();
-    fri();
+    // Run small examples first
+    kzg_small();
+    fri_small();
+
+    // Run benchmarks with large polynomials
+    kzg_benchmark();
+    fri_benchmark();
 }
