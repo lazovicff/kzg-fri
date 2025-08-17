@@ -2,14 +2,16 @@ use bls12_381::Scalar;
 use ff::Field;
 use fri::{FRIProver, FRIVerifier};
 use kzg::{KZGProver, KZGTrustedSetup, KZGVerifier};
-use poly::Polynomial;
+use poly::{MultivariatePolynomial, Polynomial};
 use rand::{Rng, thread_rng};
 use std::time::Instant;
+use sumcheck::{SumcheckProver, SumcheckVerifier};
 
 mod fri;
 mod kzg;
 mod merkle;
 mod poly;
+mod sumcheck;
 mod utils;
 
 fn kzg_benchmark() {
@@ -163,12 +165,99 @@ fn fri_small() {
     println!();
 }
 
+fn sumcheck_demo() {
+    println!("=== Sumcheck Protocol Demo ===");
+    let mut rng = thread_rng();
+
+    // Create a simple 3-variable polynomial for demonstration
+    let num_vars = 3;
+    let _size = 1 << num_vars; // 2^3 = 8 evaluations
+
+    // Define polynomial f(x1, x2, x3) with specific evaluations
+    let evaluations = vec![
+        Scalar::from(1u64), // f(0,0,0) = 1
+        Scalar::from(2u64), // f(0,0,1) = 2
+        Scalar::from(3u64), // f(0,1,0) = 3
+        Scalar::from(4u64), // f(0,1,1) = 4
+        Scalar::from(5u64), // f(1,0,0) = 5
+        Scalar::from(6u64), // f(1,0,1) = 6
+        Scalar::from(7u64), // f(1,1,0) = 7
+        Scalar::from(8u64), // f(1,1,1) = 8
+    ];
+
+    let poly = MultivariatePolynomial::new(num_vars, evaluations);
+    let claimed_sum = poly.sum(); // Sum = 1+2+3+4+5+6+7+8 = 36
+
+    println!("Polynomial has {} variables", num_vars);
+    // Generate random challenges (in practice these come from verifier/Fiat-Shamir)
+    let challenges: Vec<Scalar> = (0..num_vars).map(|_| Scalar::random(&mut rng)).collect();
+
+    // Prover generates proof
+    let start = Instant::now();
+    let prover = SumcheckProver::new(poly.clone());
+    let proof = prover.prove(claimed_sum, &challenges);
+    let prove_time = start.elapsed();
+    println!("Sumcheck Prove Time: {:?}", prove_time);
+    println!(
+        "Proof contains {} round polynomials",
+        proof.round_polynomials.len()
+    );
+
+    // Verifier checks the proof
+    let start = Instant::now();
+    let verifier = SumcheckVerifier::new(num_vars, claimed_sum);
+    let is_valid = verifier.verify_with_challenges(proof, &challenges);
+    let verify_time = start.elapsed();
+    println!("Sumcheck Verify Time: {:?}", verify_time);
+    println!("Sumcheck Verification Result: {}", is_valid);
+
+    println!();
+}
+
+fn sumcheck_benchmark() {
+    println!("=== Sumcheck Benchmark ===");
+    let mut rng = thread_rng();
+
+    // Test with larger polynomial (10 variables = 1024 evaluations)
+    let num_vars = 10;
+
+    let start = Instant::now();
+    let poly = MultivariatePolynomial::random(num_vars, &mut rng);
+    let setup_time = start.elapsed();
+    println!(
+        "Random polynomial setup (2^{} evaluations): {:?}",
+        num_vars, setup_time
+    );
+
+    let claimed_sum = poly.sum();
+    let challenges: Vec<Scalar> = (0..num_vars).map(|_| Scalar::random(&mut rng)).collect();
+
+    // Proving time
+    let start = Instant::now();
+    let prover = SumcheckProver::new(poly);
+    let proof = prover.prove(claimed_sum, &challenges);
+    let prove_time = start.elapsed();
+    println!("Sumcheck Prove Time ({} vars): {:?}", num_vars, prove_time);
+
+    // Verification time
+    let start = Instant::now();
+    let verifier = SumcheckVerifier::new(num_vars, claimed_sum);
+    let is_valid = verifier.verify_with_challenges(proof, &challenges);
+    let verify_time = start.elapsed();
+    println!("Sumcheck Verify Time: {:?}", verify_time);
+    println!("Sumcheck Verification Result: {}", is_valid);
+    assert!(is_valid);
+    println!();
+}
+
 fn main() {
     // Run small examples first
     kzg_small();
     fri_small();
+    sumcheck_demo();
 
     // Run benchmarks with large polynomials
     kzg_benchmark();
     fri_benchmark();
+    sumcheck_benchmark();
 }

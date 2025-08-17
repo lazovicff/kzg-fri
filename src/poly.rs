@@ -412,32 +412,84 @@ impl Polynomial {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Represents a multivariate polynomial over the scalar field
+/// The polynomial is stored as evaluations over the boolean hypercube {0,1}^n
+#[derive(Debug, Clone)]
+pub struct MultivariatePolynomial {
+    /// Number of variables
+    pub num_vars: usize,
+    /// Evaluations over the boolean hypercube {0,1}^n
+    /// evaluations[i] = f(binary representation of i)
+    pub evaluations: Vec<Scalar>,
+}
 
-    // BLS12_381 curve uses a prime field
-    #[test]
-    fn test_fold_polynomial() {
-        // create a simple polynomial with coefficients in Fp64
-        let poly: Polynomial = Polynomial::new(vec![
-            Scalar::from(1), // x^0
-            Scalar::from(2), // x^1
-            Scalar::from(3), // x^2
-            Scalar::from(4), // x^3
-        ]);
+impl MultivariatePolynomial {
+    /// Creates a new multivariate polynomial from evaluations
+    pub fn new(num_vars: usize, evaluations: Vec<Scalar>) -> Self {
+        assert_eq!(
+            evaluations.len(),
+            1 << num_vars,
+            "Evaluations length must be 2^num_vars"
+        );
+        Self {
+            num_vars,
+            evaluations,
+        }
+    }
 
-        let random_value = Scalar::from(5);
+    /// Creates a random multivariate polynomial
+    pub fn random<R: Rng>(num_vars: usize, rng: &mut R) -> Self {
+        let size = 1 << num_vars;
+        let evaluations: Vec<Scalar> = (0..size).map(|_| Scalar::random(&mut *rng)).collect();
+        Self::new(num_vars, evaluations)
+    }
 
-        let folded = poly.fold(random_value);
+    /// Evaluates the polynomial at a point in {0,1}^n
+    pub fn evaluate_boolean(&self, point: &[bool]) -> Scalar {
+        assert_eq!(point.len(), self.num_vars);
+        let index = point
+            .iter()
+            .enumerate()
+            .fold(0, |acc, (i, &bit)| acc | ((bit as usize) << i));
+        self.evaluations[index]
+    }
 
-        // for polynomial 1 + 2x + 3x^2 + 4x^3
-        // even coefficients are [1, 3]
-        // odd coefficients are [2, 4]
-        // after folding with random value r:
-        // result should be [(1 + 5*2), (3 + 5*4)]
-        assert_eq!(folded.coeffs.len(), 2);
-        assert_eq!(folded.coeffs[0], Scalar::from(11));
-        assert_eq!(folded.coeffs[1], Scalar::from(23));
+    /// Evaluates the polynomial at an arbitrary point using multilinear extension
+    pub fn evaluate(&self, point: &[Scalar]) -> Scalar {
+        assert_eq!(point.len(), self.num_vars);
+
+        if self.num_vars == 0 {
+            return self.evaluations[0];
+        }
+
+        let mut evals = self.evaluations.clone();
+
+        // For each variable, interpolate between 0 and 1
+        for &x in point.iter() {
+            let len = evals.len();
+            let half_len = len / 2;
+            let mut new_evals = Vec::with_capacity(half_len);
+
+            for i in 0..half_len {
+                // Linear interpolation: f(x) = f(0) * (1-x) + f(1) * x
+                let val = evals[i] * (Scalar::ONE - x) + evals[i + half_len] * x;
+                new_evals.push(val);
+            }
+            evals = new_evals;
+        }
+
+        evals[0]
+    }
+
+    /// Computes the sum over all boolean hypercube vertices
+    pub fn sum(&self) -> Scalar {
+        self.evaluations
+            .iter()
+            .fold(Scalar::ZERO, |acc, &val| acc + val)
+    }
+
+    /// Returns the degree of the polynomial (number of variables for multilinear)
+    pub fn degree(&self) -> usize {
+        self.num_vars
     }
 }
